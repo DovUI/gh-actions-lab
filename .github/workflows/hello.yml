@@ -1,0 +1,25 @@
+name: Hello World
+
+on:
+  workflow_dispatch:
+    inputs:
+      greeting:
+        description: "Who to greet"
+        default: "World"
+        required: false
+
+jobs:
+  greet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Say hello
+        run: echo "Hello, ${{ github.event.inputs.greeting }}!"
+
+      - name: Show environment info
+        run: |
+          echo "Runner OS: $RUNNER_OS"
+          echo "Branch: ${{ github.ref }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Event: ${{ github.event_name }}"

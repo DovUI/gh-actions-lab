@@ -1,0 +1,25 @@
+name: Scheduled Health Check
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"  # Every Monday at 9am UTC
+  workflow_dispatch:       # Also allow manual trigger
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check disk space
+        run: df -h
+
+      - name: Check repo size
+        run: |
+          echo "Repo size: $(du -sh . | cut -f1)"
+          echo "Number of files: $(find . -type f -not -path './.git/*' | wc -l)"
+
+      - name: Check for stale branches
+        run: |
+          echo "Branches:"
+          git branch -a
