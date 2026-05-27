@@ -1,0 +1,123 @@
+name: Validate ARM Template
+
+on:
+  push:
+    paths:
+      - "templates/**"
+  pull_request:
+    paths:
+      - "templates/**"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: JSON syntax check
+        run: |
+          echo "=== Checking JSON syntax ==="
+          for f in templates/*.json; do
+            echo "Validating: $f"
+            python3 -c "import json, sys; json.load(open(sys.argv[1]))" "$f"
+            echo "  OK"
+          done
+
+      - name: ARM structure check
+        run: |
+          echo "=== Checking ARM template structure ==="
+          python3 << 'PYEOF'
+          import json, sys
+
+          with open("templates/orch-template.json") as f:
+              template = json.load(f)
+
+          errors = []
+          warnings = []
+
+          # Required top-level keys
+          required = ["$schema", "contentVersion", "resources"]
+          for key in required:
+              if key not in template:
+                  errors.append(f"Missing required key: {key}")
+
+          # Schema check
+          schema = template.get("$schema", "")
+          if "deploymentTemplate.json" not in schema:
+              errors.append(f"Unexpected schema: {schema}")
+
+          # Content version format
+          cv = template.get("contentVersion", "")
+          if not all(part.isdigit() for part in cv.split(".")):
+              warnings.append(f"Unusual contentVersion format: {cv}")
+
+          # Resource validation
+          resources = template.get("resources", [])
+          print(f"Found {len(resources)} resources")
+          for i, res in enumerate(resources):
+              name = res.get("name", f"resource[{i}]")
+              if "type" not in res:
+                  errors.append(f"Resource {name} missing 'type'")
+              if "apiVersion" not in res:
+                  errors.append(f"Resource {name} missing 'apiVersion'")
+              if "location" not in res and "copy" not in res:
+                  warnings.append(f"Resource {name} has no 'location'")
+
+              rtype = res.get("type", "")
+              print(f"  [{rtype}] {name}")
+
+          # Parameter validation
+          params = template.get("parameters", {})
+          print(f"\nFound {len(params)} parameters")
+          for pname, pdef in params.items():
+              if "type" not in pdef:
+                  errors.append(f"Parameter '{pname}' missing 'type'")
+              if "metadata" not in pdef or "description" not in pdef.get("metadata", {}):
+                  warnings.append(f"Parameter '{pname}' has no description")
+              print(f"  {pname} ({pdef.get('type', '?')})")
+
+          # Output validation
+          outputs = template.get("outputs", {})
+          print(f"\nFound {len(outputs)} outputs")
+
+          # Security checks
+          for pname, pdef in params.items():
+              if any(s in pname.lower() for s in ["password", "secret", "key", "token"]):
+                  if pdef.get("type") != "secureString" and pdef.get("type") != "securestring":
+                      warnings.append(f"Parameter '{pname}' looks sensitive but is not secureString")
+
+          for i, res in enumerate(resources):
+              props = res.get("properties", {})
+              site_config = props.get("siteConfig", {})
+              if res.get("type") == "Microsoft.Web/sites/config":
+                  tls = props.get("minTlsVersion", "")
+                  if tls and tls < "1.2":
+                      warnings.append(f"Resource {res.get('name', i)}: minTlsVersion is {tls} (recommend 1.2+)")
+
+          # Report
+          print("\n=== Results ===")
+          if warnings:
+              for w in warnings:
+                  print(f"::warning::{w}")
+          if errors:
+              for e in errors:
+                  print(f"::error::{e}")
+              sys.exit(1)
+          else:
+              print("All checks passed!")
+          PYEOF
+
+      - name: Check for hardcoded secrets
+        run: |
+          echo "=== Scanning for potential secrets ==="
+          FOUND=0
+          for pattern in 'password' 'secret' 'apikey' 'connectionstring'; do
+            if grep -inP "\"$pattern\"\s*:\s*\"[^[\$]" templates/*.json 2>/dev/null; then
+              echo "::warning::Possible hardcoded value for '$pattern'"
+              FOUND=1
+            fi
+          done
+          if [ $FOUND -eq 0 ]; then
+            echo "No hardcoded secrets detected"
+          fi
